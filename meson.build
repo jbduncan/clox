@@ -13,7 +13,9 @@ clox_sources = [
   'memory.h',
   'memory.c',
   'value.h',
-  'value.c'
+  'value.c',
+  'vm.h',
+  'vm.c'
 ]
 
 exe = executable(
