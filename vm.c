@@ -1,5 +1,7 @@
+#include <stdbool.h>
 #include <stdio.h>
 #include "common.h"
+#include "compiler.h"
 #include "vm.h"
 #include "debug.h"
 
@@ -35,7 +37,7 @@ Value pop() {
 // - "computed goto"
 //
 // Note that the fastest techniques would need non-standard extensions to C
-// or hand-written assembly code.
+// or handwritten assembly code.
 static InterpretResult run() {
 #define READ_BYTE() (*vm.ip++)
 #define READ_CONSTANT() (vm.chunk->constants.values[READ_BYTE()])
@@ -99,8 +101,7 @@ static InterpretResult run() {
 #undef BINARY_OP
 }
 
-InterpretResult interpret(Chunk* chunk) {
-  vm.chunk = chunk;
-  vm.ip = vm.chunk->code;
-  return run();
+InterpretResult interpret(const char* source) {
+  compile(source);
+  return INTERPRET_OK;
 }

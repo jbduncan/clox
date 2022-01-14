@@ -4,18 +4,22 @@ project(
   default_options : ['warning_level=3'])
 
 clox_sources = [
-  'main.c',
   'chunk.h',
   'chunk.c',
   'common.h',
-  'debug.h',
+  'compiler.c',
+  'compiler.h',
   'debug.c',
-  'memory.h',
+  'debug.h',
+  'main.c',
   'memory.c',
-  'value.h',
+  'memory.h',
+  'scanner.c',
+  'scanner.h',
   'value.c',
+  'value.h',
+  'vm.c',
   'vm.h',
-  'vm.c'
 ]
 
 exe = executable(
