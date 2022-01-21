@@ -1,7 +1,8 @@
 project(
   'clox', 'c',
   version : '0.1',
-  default_options : ['warning_level=3'])
+  default_options : ['warning_level=3']
+)
 
 clox_sources = [
   'chunk.h',
@@ -26,6 +27,12 @@ exe = executable(
   'clox',
   clox_sources,
   install : true,
-  c_args : ['-Wall', '-Wextra', '-Werror', '-Wno-unused-parameter'])
+  c_args : [
+    '-Wall',
+    '-Wextra',
+    # '-Werror',
+    '-Wno-unused-parameter',
+  ]
+)
 
 test('basic', exe)
