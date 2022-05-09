@@ -6,12 +6,39 @@
 #include "compiler.h"
 #include "scanner.h"
 
+#ifdef DEBUG_PRINT_CODE
+#include "debug.h"
+#endif
+
 typedef struct {
   Token current;
   Token previous;
   bool hadError;
   bool panicMode;
 } Parser;
+
+// Defines the order in which parsed tokens are evaluated.
+typedef enum {
+  PREC_NONE,
+  PREC_ASSIGNMENT,  // =
+  PREC_OR,          // or
+  PREC_AND,         // and
+  PREC_EQUALITY,    // == !=
+  PREC_COMPARISON,  // < > <= >=
+  PREC_TERM,        // + -
+  PREC_FACTOR,      // * /
+  PREC_UNARY,       // ! -
+  PREC_CALL,        // . ()
+  PREC_PRIMARY
+} Precedence;
+
+typedef void (*ParseFn)();
+
+typedef struct {
+    ParseFn prefix;
+    ParseFn infix;
+    Precedence precedence;
+} ParseRule;
 
 Parser parser;
 Chunk* compilingChunk;
@@ -93,6 +120,8 @@ static uint8_t makeConstant(Value value) {
     // "isn't particularly illuminating". [1]
     //
     // [1] https://www.craftinginterpreters.com/compiling-expressions.html#parsers-for-tokens
+    //
+    // TODO: See how other Lox implementations do this.
     error("Too many constants in one chunk.");
     return 0;
   }
@@ -106,11 +135,169 @@ static void emitConstant(Value value) {
 
 static void endCompiler() {
   emitReturn();
+#ifdef DEBUG_PRINT_CODE
+  if (!parser.hadError) {
+    disassembleChunk(currentChunk(), "code");
+  }
+#endif
+}
+
+static void expression();
+static ParseRule* getRule(TokenType type);
+static void parsePrecedence(Precedence precedence);
+
+static void binary() {
+  TokenType operatorType = parser.previous.type;
+  ParseRule* rule = getRule(operatorType);
+  // Compile the right operand.
+  //
+  // To quote Robert Nystrom, the author of craftinginterpreters.com: "We use one higher level
+  // of precedence for the right operand because the binary operators are left-associative.
+  // Given a series of the same operator, like:
+  //
+  //   1 + 2 + 3 + 4
+  //
+  // We want to parse it like:
+  //
+  //   ((1 + 2) + 3) + 4
+  //
+  // Thus, when parsing the right-hand operand to the first +, we want to consume the 2, but
+  // not the rest, so we use one level above +'s precedence. But if our operator was
+  // right-associative, this would be wrong. Given:
+  //
+  //   a = b = c = d
+  //
+  // Since assignment is right-associative, we want to parse it as:
+  //
+  //   a = (b = (c = d))
+  //
+  // To enable that, we would call parsePrecedence() with the same precedence as the current
+  // operator."
+  parsePrecedence((Precedence)(rule->precedence + 1));
+
+  switch (operatorType) {
+    case TOKEN_PLUS:          emitByte(OP_ADD); break;
+    case TOKEN_MINUS:         emitByte(OP_SUBTRACT); break;
+    case TOKEN_STAR:          emitByte(OP_MULTIPLY); break;
+    case TOKEN_SLASH:         emitByte(OP_DIVIDE); break;
+    default: return; // Unreachable.
+  }
+}
+
+static void expression() {
+  // Parse any kind of expression.
+  parsePrecedence(PREC_ASSIGNMENT);
+}
+
+static void grouping() {
+  expression();
+  consume(TOKEN_RIGHT_PAREN, "Expect ')' after expression.");
 }
 
 static void number() {
   double value = strtod(parser.previous.start, NULL);
   emitConstant(value);
+}
+
+// Robert Nystrom, the author of craftinginterpreters.com, has this to say about unary():
+//
+// "Emitting the OP_NEGATE instruction after the operands does mean that the current token when the bytecode is written
+// is not the - token. That mostly doesn't matter, except that we use that token for the line number to associate with
+// that instruction.
+//
+// This means if you have a multi-line negation expression, like:
+//
+//     print -
+//       true;
+//
+// Then the runtime error will be reported on the wrong line. Here, it would show the error on line 2, even though the -
+// is on line 1. A more robust approach would be to store the token's line before compiling the operand and then pass
+// that into emitByte(), but I wanted to keep things simple for the book."
+//
+// TODO: Address this comment.
+static void unary() {
+  TokenType operatorType = parser.previous.type;
+
+  // Compile the operand.
+  //
+  // Only parse unary expressions and those of higher precedence. So, given the following expression:
+  //
+  //   -a.b + c;
+  //
+  // ...only parse the "-a.b" part. If we did not do this, the - would apply to all of "a.b + c", which does not follow
+  // the Lox specification.
+  parsePrecedence(PREC_UNARY);
+
+  // Emit the operator instruction.
+  switch (operatorType) {
+    case TOKEN_MINUS: emitByte(OP_NEGATE); break;
+    default: return; // Unreachable.
+  }
+}
+
+ParseRule rules[] = {
+    [TOKEN_LEFT_PAREN]    = {grouping, NULL,   PREC_NONE},
+    [TOKEN_RIGHT_PAREN]   = {NULL,     NULL,   PREC_NONE},
+    [TOKEN_LEFT_BRACE]    = {NULL,     NULL,   PREC_NONE},
+    [TOKEN_RIGHT_BRACE]   = {NULL,     NULL,   PREC_NONE},
+    [TOKEN_COMMA]         = {NULL,     NULL,   PREC_NONE},
+    [TOKEN_DOT]           = {NULL,     NULL,   PREC_NONE},
+    [TOKEN_MINUS]         = {unary,    binary, PREC_TERM},
+    [TOKEN_PLUS]          = {NULL,     binary, PREC_TERM},
+    [TOKEN_SEMICOLON]     = {NULL,     NULL,   PREC_NONE},
+    [TOKEN_SLASH]         = {NULL,     binary, PREC_FACTOR},
+    [TOKEN_STAR]          = {NULL,     binary, PREC_FACTOR},
+    [TOKEN_BANG]          = {NULL,     NULL,   PREC_NONE},
+    [TOKEN_BANG_EQUAL]    = {NULL,     NULL,   PREC_NONE},
+    [TOKEN_EQUAL]         = {NULL,     NULL,   PREC_NONE},
+    [TOKEN_EQUAL_EQUAL]   = {NULL,     NULL,   PREC_NONE},
+    [TOKEN_GREATER]       = {NULL,     NULL,   PREC_NONE},
+    [TOKEN_GREATER_EQUAL] = {NULL,     NULL,   PREC_NONE},
+    [TOKEN_LESS]          = {NULL,     NULL,   PREC_NONE},
+    [TOKEN_LESS_EQUAL]    = {NULL,     NULL,   PREC_NONE},
+    [TOKEN_IDENTIFIER]    = {NULL,     NULL,   PREC_NONE},
+    [TOKEN_STRING]        = {NULL,     NULL,   PREC_NONE},
+    [TOKEN_NUMBER]        = {number,   NULL,   PREC_NONE},
+    [TOKEN_AND]           = {NULL,     NULL,   PREC_NONE},
+    [TOKEN_CLASS]         = {NULL,     NULL,   PREC_NONE},
+    [TOKEN_ELSE]          = {NULL,     NULL,   PREC_NONE},
+    [TOKEN_FALSE]         = {NULL,     NULL,   PREC_NONE},
+    [TOKEN_FOR]           = {NULL,     NULL,   PREC_NONE},
+    [TOKEN_FUN]           = {NULL,     NULL,   PREC_NONE},
+    [TOKEN_IF]            = {NULL,     NULL,   PREC_NONE},
+    [TOKEN_NIL]           = {NULL,     NULL,   PREC_NONE},
+    [TOKEN_OR]            = {NULL,     NULL,   PREC_NONE},
+    [TOKEN_PRINT]         = {NULL,     NULL,   PREC_NONE},
+    [TOKEN_RETURN]        = {NULL,     NULL,   PREC_NONE},
+    [TOKEN_SUPER]         = {NULL,     NULL,   PREC_NONE},
+    [TOKEN_THIS]          = {NULL,     NULL,   PREC_NONE},
+    [TOKEN_TRUE]          = {NULL,     NULL,   PREC_NONE},
+    [TOKEN_VAR]           = {NULL,     NULL,   PREC_NONE},
+    [TOKEN_WHILE]         = {NULL,     NULL,   PREC_NONE},
+    [TOKEN_ERROR]         = {NULL,     NULL,   PREC_NONE},
+    [TOKEN_EOF]           = {NULL,     NULL,   PREC_NONE},
+};
+
+// Parse only the subsequent tokens with a precedence greater than or equal to the given precedence.
+static void parsePrecedence(Precedence precedence) {
+  advance();
+  ParseFn prefixRule = getRule(parser.previous.type)->prefix;
+  if (prefixRule == NULL) {
+    error("Expect expression.");
+    return;
+  }
+
+  prefixRule();
+
+  while (precedence <= getRule(parser.current.type)->precedence) {
+    advance();
+    ParseFn infixRule = getRule(parser.previous.type)->infix;
+    infixRule();
+  }
+}
+
+static ParseRule* getRule(TokenType type) {
+  return &rules[type];
 }
 
 bool compile(const char* source, Chunk* chunk) {
