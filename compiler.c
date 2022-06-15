@@ -196,7 +196,7 @@ static void grouping() {
 
 static void number() {
   double value = strtod(parser.previous.start, NULL);
-  emitConstant(value);
+  emitConstant(NUMBER_VAL(value));
 }
 
 // Robert Nystrom, the author of craftinginterpreters.com, has this to say about unary():
