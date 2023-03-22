@@ -15,6 +15,8 @@ clox_sources = [
   'main.c',
   'memory.c',
   'memory.h',
+  'object.c',
+  'object.h',
   'scanner.c',
   'scanner.h',
   'value.c',
